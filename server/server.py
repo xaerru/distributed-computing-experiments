@@ -1,4 +1,4 @@
-import socket, json, os, struct
+import socket, json, os, struct, concurrent.futures
 
 def recv_exact(sock, n: int) -> bytes:
     data = b""
@@ -48,11 +48,25 @@ def handle_request(conn: socket.socket, request: str):
             conn.sendall(struct.pack("Q", len(error_msg)))
             conn.sendall(error_msg)
 
-
     except Exception as e:
         error_msg = json.dumps({"error": str(e)}).encode()
         conn.sendall(struct.pack("Q", len(error_msg)))
         conn.sendall(error_msg)
+
+def handle_client(conn: socket.socket):
+    with conn:
+        while True:
+            try:
+                # read 8-byte length prefix
+                size_data = recv_exact(conn, 8)
+                (size,) = struct.unpack("Q", size_data)
+                request = recv_exact(conn, size).decode()
+
+                print(f"Received: {request}")
+                handle_request(conn, request)
+            except ConnectionError:
+                print("Client disconnected")
+                break
 
 def main():
     host = "127.0.0.1"
@@ -62,21 +76,13 @@ def main():
         s.bind((host, port))
         s.listen()
         print(f"Server listening on {host}:{port}...")
-        while True:
-            conn, _ = s.accept()
-            with conn:
-                while True:
-                    try:
-                        # read 8-byte length prefix
-                        size_data = recv_exact(conn, 8)
-                        (size,) = struct.unpack("Q", size_data)
-                        request = recv_exact(conn, size).decode()
 
-                        print(f"Received: {request}")
-                        handle_request(conn, request)
-                    except ConnectionError:
-                        print("Client disconnected")
-                        break
+        # Create a thread pool with a maximum of 10 workers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            while True:
+                conn, _ = s.accept()
+                # Submit the client handling to the thread pool
+                executor.submit(handle_client, conn)
 
 if __name__ == "__main__":
     main()
