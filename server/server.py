@@ -53,7 +53,7 @@ def handle_request(conn: socket.socket, request: str):
         conn.sendall(struct.pack("Q", len(error_msg)))
         conn.sendall(error_msg)
 
-def handle_client(conn: socket.socket):
+def handle_client(conn: socket.socket, no_of_threads: int):
     with conn:
         while True:
             try:
@@ -65,7 +65,7 @@ def handle_client(conn: socket.socket):
                 print(f"Received: {request}")
                 handle_request(conn, request)
             except ConnectionError:
-                print("Client disconnected")
+                print(f"Client {no_of_threads} disconnected")
                 break
 
 def main():
@@ -76,13 +76,17 @@ def main():
         s.bind((host, port))
         s.listen()
         print(f"Server listening on {host}:{port}...")
+        global no_of_threads
+        no_of_threads = 0
 
         # Create a thread pool with a maximum of 10 workers
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             while True:
                 conn, _ = s.accept()
+                no_of_threads += 1
+                print(f"Thread {no_of_threads} spawned for client {no_of_threads}")
                 # Submit the client handling to the thread pool
-                executor.submit(handle_client, conn)
+                executor.submit(handle_client, conn, no_of_threads)
 
 if __name__ == "__main__":
     main()
