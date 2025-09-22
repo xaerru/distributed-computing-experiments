@@ -1,8 +1,12 @@
 import socket, json, struct
 
 EDGE_BASE_PORT = 8001
-NUM_EDGES = 5
-HOST = 'localhost'  # Client runs outside Docker, connects to host-mapped ports
+NUM_EDGES = 3  # Only 3 edge servers for the assignment
+EDGE_SERVERS = [
+    {'id': 0, 'host': 'edge-server-0', 'port': 8001},
+    {'id': 1, 'host': 'edge-server-1', 'port': 8002},
+    {'id': 2, 'host': 'edge-server-2', 'port': 8003}
+]
 
 def recv_exact(sock, n: int) -> bytes:
     data = b""
@@ -55,13 +59,17 @@ def rpc_call(s: socket.socket, function: str, args: list, clock: int):
             return resp_clock, payload
 
 def pick_edge_for_image(img_id:int):
+    """Load balance by image ID modulo number of edge servers"""
     idx = img_id % NUM_EDGES
-    port = EDGE_BASE_PORT + idx
-    return HOST, port
+    edge_server = EDGE_SERVERS[idx]
+    return edge_server['host'], edge_server['port']
 
 def main():
     logical_clock = 0
-    print("Client (LB) ready. This client forwards requests to edge chosen by image_id % 5 (ports 8001..8005).")
+    print("Client (LB) ready. This client forwards requests to edge servers (Docker containers).")
+    edge_list = [f"{e['host']}:{e['port']}" for e in EDGE_SERVERS]
+    print(f"Available edge servers: {edge_list}")
+    
     while True:
         print("Choose: 1) get_image  2) get_image_size  3) exit")
         try:
@@ -88,7 +96,7 @@ def main():
                 s.connect((host, port))
                 if op == 1:
                     logical_clock += 1
-                    print(f"Client: Sending get_image request at clock {logical_clock}")
+                    print(f"Client: Sending get_image request at clock {logical_clock} to {host}:{port}")
                     resp_clock, resp = rpc_call(s, "get_image", [img_id], logical_clock)
                     # If resp is dict => error, else bytes => image
                     if isinstance(resp, dict) and resp.get("error"):
@@ -98,19 +106,19 @@ def main():
                         fname = f"downloaded_image_{img_id}.jpg"
                         with open(fname, "wb") as f:
                             f.write(resp)
-                        print(f"Saved {fname} (from edge {port})")
+                        print(f"Saved {fname} (from edge {host}:{port})")
                 elif op == 2:
                     logical_clock += 1
-                    print(f"Client: Sending get_image_size request at clock {logical_clock}")
+                    print(f"Client: Sending get_image_size request at clock {logical_clock} to {host}:{port}")
                     resp_clock, resp = rpc_call(s, "get_image_size", [img_id], logical_clock)
                     if isinstance(resp, dict) and resp.get("size") is not None:
-                        print(f"Size: {resp['size']} bytes (from edge {port})")
+                        print(f"Size: {resp['size']} bytes (from edge {host}:{port})")
                     else:
                         print("Error from edge:", resp)
                 else:
                     print("Unknown operation.")
         except Exception as e:
-            print(f"Client: error contacting edge {port} -> {e}")
+            print(f"Client: error contacting edge {host}:{port} -> {e}")
 
         print()
 

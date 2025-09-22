@@ -7,7 +7,16 @@ Hardcoded config:
   canonical server at 127.0.0.1:9000
 RPC format:
 - Client sends: <8-byte length><JSON request bytes>
-  JSON: {"function": "...", "args": [...], "clock": <int>}
+  JSON: {"function": "                    s.sendall(msg)
+                    # read ack
+                    recv_exact(s, 8)
+                    size_data = s.recv(8)
+                    if size_data:
+                        (size,) = struct.unpack("Q", size_data)
+                        payload = recv_exact(s, size) if size>0 else b""
+                print(f"Edge {self.node_id}: instruct replication to {peer['host']}:{peer['port']} completed") 
+            except Exception as e:
+                print(f"Edge {self.node_id}: replication to {peer['host']}:{peer['port']} failed -> {e}")s": [...], "clock": <int>}
 - Server responds: <8-byte clock><...> then function-specific payload
 Supported RPC functions (from clients or inter-edge):
 - get_image [id]
@@ -21,10 +30,10 @@ Supported RPC functions (from clients or inter-edge):
 """
 import socket, json, struct, os, sys, threading, time
 
-HOST = '127.0.0.1'
+HOST = '0.0.0.0'  # Listen on all interfaces for Docker
 EDGE_BASE_PORT = 8001
-NUM_EDGES = 5
-CANONICAL_HOST = '127.0.0.1'
+NUM_EDGES = 3  # Only 3 edge servers for this assignment
+CANONICAL_HOST = 'canonical-server'  # Docker service name
 CANONICAL_PORT = 9000
 
 def recv_exact(sock, n: int) -> bytes:
@@ -79,7 +88,15 @@ class EdgeServer:
         self.port = EDGE_BASE_PORT + node_id
         self.es_dir = os.path.join(os.getcwd(), f"es{node_id}")
         os.makedirs(self.es_dir, exist_ok=True)
-        self.peers = [(EDGE_BASE_PORT + i) for i in range(NUM_EDGES) if i != node_id]
+        # Create peer mappings for Docker networking
+        self.peers = []
+        for i in range(NUM_EDGES):
+            if i != node_id:
+                self.peers.append({
+                    'id': i,
+                    'host': f'edge-server-{i}',
+                    'port': EDGE_BASE_PORT + i
+                })
         self.leader_id = None
         self.leader_lock = threading.Lock()
         self.alive = True
@@ -88,6 +105,8 @@ class EdgeServer:
         self.heartbeat_interval = 2.0
         self.heartbeat_fail_threshold = 6.0  # if no heartbeat/ping for this many seconds -> election
         print(f"Edge {node_id} running on port {self.port}, data dir: {self.es_dir}")
+        peer_list = [f"{p['host']}:{p['port']}" for p in self.peers]
+        print(f"Peers: {peer_list}")
 
     def start(self):
         threading.Thread(target=self._start_listener, daemon=True).start()
@@ -250,12 +269,13 @@ class EdgeServer:
         higher = [i for i in range(NUM_EDGES) if i > self.node_id]
         got_ok = False
         for hid in higher:
+            host = f'edge-server-{hid}'
             port = EDGE_BASE_PORT + hid
             try:
                 # send election message
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(2)
-                    s.connect((HOST, port))
+                    s.connect((host, port))
                     req = json.dumps({"function": "election", "args": [self.node_id], "clock": 0}).encode()
                     s.sendall(struct.pack("Q", len(req)))
                     s.sendall(req)
@@ -275,11 +295,12 @@ class EdgeServer:
             print(f"Edge {self.node_id}: no higher node replied, declaring self coordinator" )
             for i in range(NUM_EDGES):
                 if i == self.node_id: continue
+                host = f'edge-server-{i}'
                 port = EDGE_BASE_PORT + i
                 try:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                         s.settimeout(2)
-                        s.connect((HOST, port))
+                        s.connect((host, port))
                         msg = json.dumps({"function": "coordinator", "args": [self.node_id], "clock": 0}).encode()
                         s.sendall(struct.pack("Q", len(msg)))
                         s.sendall(msg)
@@ -305,14 +326,14 @@ class EdgeServer:
     def replicate_to_peers(self, img_id:int):
         """Leader instructs other peers to pull the image from the leader (leader-initiated replication)."""
         print(f"Edge {self.node_id}: replicating image{img_id} to peers..." )
-        # leader info
-        leader_host = HOST
+        # leader info - use container hostname
+        leader_host = f'edge-server-{self.node_id}'
         leader_port = self.port
-        for p in self.peers:
+        for peer in self.peers:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     s.settimeout(4)
-                    s.connect((HOST, p))
+                    s.connect((peer['host'], peer['port']))
                     msg = json.dumps({"function": "replicate", "args": [img_id, leader_host, leader_port], "clock": 0}).encode()
                     s.sendall(struct.pack("Q", len(msg)))
                     s.sendall(msg)
@@ -322,9 +343,9 @@ class EdgeServer:
                     if size_data:
                         (size,) = struct.unpack("Q", size_data)
                         payload = recv_exact(s, size) if size>0 else b""
-                print(f"Edge {self.node_id}: instruct replication to {p} completed") 
+                print(f"Edge {self.node_id}: instruct replication to {peer['host']}:{peer['port']} completed") 
             except Exception as e:
-                print(f"Edge {self.node_id}: replication to {p} failed -> {e}") 
+                print(f"Edge {self.node_id}: replication to {peer['host']}:{peer['port']} failed -> {e}") 
 
     def notify_leader_cached(self, img_id:int):
         with self.leader_lock:
@@ -378,11 +399,11 @@ class EdgeServer:
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
-        print("Usage: python server.py <node_id (0..4)>")
+        print(f"Usage: python server.py <node_id (0..{NUM_EDGES-1})>")
         sys.exit(1)
     node_id = int(sys.argv[1])
     if node_id < 0 or node_id >= NUM_EDGES:
-        print("node_id must be 0..4")
+        print(f"node_id must be 0..{NUM_EDGES-1}")
         sys.exit(1)
     server = EdgeServer(node_id)
     server.start()
