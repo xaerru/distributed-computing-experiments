@@ -55,9 +55,7 @@ def rpc_call(s: socket.socket, function: str, args: list, clock: int):
             return resp_clock, payload
 
 def pick_edge_for_image(img_id:int):
-    idx = img_id % NUM_EDGES
-    port = EDGE_BASE_PORT + idx
-    return HOST, port
+    return HOST, 8000
 
 def main():
     logical_clock = 0
