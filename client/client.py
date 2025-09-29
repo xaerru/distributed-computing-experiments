@@ -2,7 +2,7 @@ import socket, json, struct
 
 EDGE_BASE_PORT = 8001
 NUM_EDGES = 5
-HOST = 'localhost'  # Client runs outside Docker, connects to host-mapped ports
+HOST = '127.0.0.1'
 
 def recv_exact(sock, n: int) -> bytes:
     data = b""

@@ -1,6 +1,6 @@
 import socket, json, struct, os, threading
 
-HOST = "0.0.0.0"  # Listen on all interfaces for Docker
+HOST = "127.0.0.1"
 PORT = 9000  # canonical server port (hardcoded)
 
 def recv_exact(sock, n: int) -> bytes:
